@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      width: 1280px;
+      height: 800px;
+      background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      text-align: center;
+      color: white;
+      max-width: 900px;
+    }
+    .logo {
+      font-size: 72px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 64px;
+      margin: 0 0 20px 0;
+      background: linear-gradient(90deg, #60a5fa, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .tagline {
+      font-size: 28px;
+      color: #a0a0b0;
+      margin-bottom: 40px;
+    }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 30px;
+      margin-top: 50px;
+    }
+    .feature {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 30px 20px;
+    }
+    .feature-icon {
+      font-size: 48px;
+      margin-bottom: 15px;
+    }
+    .feature h3 {
+      font-size: 20px;
+      margin: 0 0 10px 0;
+      color: #60a5fa;
+    }
+    .feature p {
+      font-size: 14px;
+      color: #a0a0b0;
+      margin: 0;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">🔷</div>
+    <h1>BluePrint PDF Viewer</h1>
+    <div class="tagline">Open PDFs in your powerful editor, not Chrome's basic viewer</div>
+    
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">🌐</div>
+        <h3>Web PDFs</h3>
+        <p>Automatically redirects online PDFs to BluePrint editor</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📂</div>
+        <h3>Local Files</h3>
+        <p>Open local PDFs via file picker or file:// URLs</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">⚡</div>
+        <h3>Toggle</h3>
+        <p>Enable/disable interception with one click</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

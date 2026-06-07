@@ -1,0 +1,52 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow authenticated users to read/write documents and subcollections
+    match /documents/{docId} {
+      allow read, write: if request.auth != null;
+      
+      match /{subcollection}/{subId} {
+        allow read, write: if request.auth != null;
+      }
+    }
+
+    // Users can read their own profile (license status)
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      // Only Cloud Functions can write (admin SDK bypasses rules)
+      allow write: if false;
+    }
+
+    // License keys — no client access (only Cloud Functions)
+    match /licenseKeys/{key} {
+      allow read, write: if false;
+    }
+
+    // Projects collection — authenticated users can read/write their own projects
+    match /projects/{projectId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Tickets collection — authenticated users can create tickets and read their own
+    match /tickets/{ticketId} {
+      allow create: if request.auth != null;
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      // Only Cloud Functions can update/delete tickets
+      allow update, delete: if false;
+    }
+
+    // Usage tracking collections — Cloud Functions only (admin SDK bypasses rules)
+    match /usage/{uid} {
+      allow read, write: if false;
+    }
+
+    match /daily_usage/{docId} {
+      allow read, write: if false;
+    }
+
+    match /system_usage/{docId} {
+      allow read, write: if false;
+    }
+  }
+}
