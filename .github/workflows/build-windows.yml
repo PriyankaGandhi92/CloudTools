@@ -29,16 +29,13 @@ jobs:
           workspaces: './pdf-editor/src-tauri -> target'
 
       - name: Install frontend dependencies
-        working-directory: pdf-editor
-        run: npm ci
+        run: cd pdf-editor && npm ci
 
       - name: Build frontend
-        working-directory: pdf-editor
-        run: npm run build
+        run: cd pdf-editor && npm run build
 
       - name: Build Tauri app
-        working-directory: pdf-editor
-        run: npm run tauri:build
+        run: cd pdf-editor && npm run tauri:build
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
