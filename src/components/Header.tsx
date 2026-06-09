@@ -500,10 +500,10 @@ export default function Header({ isMobile, onToggleLeftSidebar, onToggleRightSid
       </button>
       <button
         onClick={() => {
-          alert('Windows desktop app coming soon! It requires Rust to build. Contact the developer for more information.');
+          window.open('https://github.com/PriyankaGandhi92/CloudTools/releases/tag/v1.0.12', '_blank');
         }}
         className="p-1.5 hover:bg-bb-hover rounded text-bb-muted hover:text-bb-text transition-colors shrink-0"
-        title="Download Windows App (Coming Soon)"
+        title="Download Windows App"
       >
         <MonitorDown size={15} />
       </button>
