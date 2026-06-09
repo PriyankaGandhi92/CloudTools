@@ -4,6 +4,7 @@ import type Konva from 'konva';
 import { useStore } from '../store/useStore';
 import { renderPage, getTextAtPosition, getPageTextItems, getVectorSegmentsForPage, extractFullVectorGeometry, cleanupPdfPage } from '../utils/pdfRenderer';
 import { saveCADLayerToFirestore, loadCADChunksFromFirestore, deleteCADChunksFromFirestore } from '../utils/cadFirestore';
+import { flattenEraserToPdf } from '../utils/flattenEraser';
 import type { PdfTextItem } from '../utils/pdfRenderer';
 import PinContentDialog from './PinContentDialog';
 import EditTextDialog from './EditTextDialog';
@@ -27,6 +28,7 @@ import type { Annotation, Point, ToolType, MeasurementUnit } from '../types';
 import { ELEMENT_CATEGORIES } from '../utils/identifyElements';
 import { getLineIntersection, isPointInPolygon, getOffsetPoints, rotatePointAround, getDist, pointToSegmentDistance } from '../utils/cadGeometry';
 import { generateDXF } from '../utils/exportDxf';
+import { normalizeToOrtho } from '../utils/geometryEngine';
 import {
   Copy as CopyIcon,
   RotateCw as RotateCwIcon,
@@ -314,9 +316,39 @@ export default function MainCanvas({ pageOverride, onPageChange }: MainCanvasPro
       }
       // CAD Interactive Commands: Enter advances from Step 0 (selection) to Step 1 (base point)
       if (e.key === 'Enter') {
-        const { cadPendingCommand, cadCommandStep, cadSelectedIds } = useStore.getState();
+        const { cadPendingCommand, cadCommandStep, cadSelectedIds, cadPendingPoints } = useStore.getState();
         const cmdUp = cadPendingCommand?.toUpperCase() || '';
         console.log('Enter pressed - cadPendingCommand:', cadPendingCommand, 'cadCommandStep:', cadCommandStep, 'cadSelectedIds:', cadSelectedIds);
+
+        // Handle PLINE finalization with Smart Ortho
+        if ((cmdUp === 'PLINE' || cmdUp === 'PL') && cadPendingPoints.length >= 2) {
+          e.preventDefault();
+          const { smartTraceEnabled } = useStore.getState();
+          let finalPoints = [...cadPendingPoints];
+          if (smartTraceEnabled) {
+            finalPoints = normalizeToOrtho(finalPoints, 15);
+          }
+          const id = crypto.randomUUID();
+          const ann: Annotation = {
+            id,
+            type: 'line',
+            pageIndex: currentPage,
+            points: finalPoints,
+            style: { ...activeStyle },
+            createdBy: 'local',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            layerOrder: annotations.length
+          };
+          useStore.getState().addAnnotation(ann);
+          pushUndo({ type: 'add', annotation: ann });
+          useStore.getState().setCADPendingPoints([]);
+          useStore.getState().setCADPendingCommand(null);
+          useStore.getState().setCADCommandStep(0);
+          setActiveTool('select');
+          console.log('PLINE finalized with', finalPoints.length, 'points');
+          return;
+        }
 
         if (['ROTATE', 'MOVE', 'COPY', 'OFFSET'].includes(cmdUp)) {
           if (cadCommandStep === 0) {
@@ -1692,7 +1724,17 @@ export default function MainCanvas({ pageOverride, onPageChange }: MainCanvasPro
         // Apply ORTHO constraint (Shift key) for line-based commands
         let finalPos = pos;
         const cmdUpper = cadPendingCommand.toUpperCase();
-        if (e.evt.shiftKey &&
+        
+        // Apply Smart Ortho Trace if enabled (replaces Shift key ORTHO)
+        const { smartTraceEnabled } = useStore.getState();
+        if (smartTraceEnabled &&
+            (cmdUpper === 'LINE' || cmdUpper === 'L' ||
+             cmdUpper === 'PLINE' || cmdUpper === 'PL' ||
+             cmdUpper === 'ARROW' || cmdUpper === 'AR') &&
+            cadPendingPoints.length > 0) {
+          const lastPoint = cadPendingPoints[cadPendingPoints.length - 1];
+          finalPos = normalizeToOrtho([lastPoint, pos], 15)[1];
+        } else if (e.evt.shiftKey &&
             (cmdUpper === 'LINE' || cmdUpper === 'L' ||
              cmdUpper === 'PLINE' || cmdUpper === 'PL' ||
              cmdUpper === 'ARROW' || cmdUpper === 'AR') &&
@@ -2119,7 +2161,15 @@ export default function MainCanvas({ pageOverride, onPageChange }: MainCanvasPro
         // Apply ORTHO constraint (Shift key) for line-based commands
         let finalCursorPos = activeCursorPos;
         const cmdUp = cadPendingCommand.toUpperCase();
-        if (shiftHeld.current &&
+        const { smartTraceEnabled } = useStore.getState();
+        
+        if (smartTraceEnabled &&
+            (cmdUp === 'LINE' || cmdUp === 'L' ||
+             cmdUp === 'PLINE' || cmdUp === 'PL' ||
+             cmdUp === 'ARROW' || cmdUp === 'AR')) {
+          const lastPoint = cadPendingPoints[cadPendingPoints.length - 1];
+          finalCursorPos = normalizeToOrtho([lastPoint, activeCursorPos], 15)[1];
+        } else if (shiftHeld.current &&
             (cmdUp === 'LINE' || cmdUp === 'L' ||
              cmdUp === 'PLINE' || cmdUp === 'PL' ||
              cmdUp === 'ARROW' || cmdUp === 'AR')) {
@@ -2468,9 +2518,10 @@ export default function MainCanvas({ pageOverride, onPageChange }: MainCanvasPro
             eraserColor = `rgb(${bestColor[0]},${bestColor[1]},${bestColor[2]})`;
           }
         }
-        ann.style = { stroke: eraserColor, strokeWidth: 0, fill: eraserColor, opacity: 1 };
-        addAnnotation(ann);
-        pushUndo({ type: 'add', annotation: ann });
+        // Flatten eraser directly to PDF using pdf-lib
+        if (pdfData) {
+          flattenEraserToPdf(ann.points[0].x, ann.points[0].y, ann.width, ann.height, eraserColor, currentPage, pdfData, setPdfData, pageRotations[currentPage] || 0);
+        }
         setDrawingPoints([]);
         return;
       }
@@ -2665,6 +2716,16 @@ export default function MainCanvas({ pageOverride, onPageChange }: MainCanvasPro
         ann.style.fontFamily = ann.style.fontFamily || 'Arial';
         ann.align = ann.align || 'left';
         ann.lineHeight = ann.lineHeight || 1.2;
+      }
+
+      // Apply Smart Ortho Trace if enabled
+      const { smartTraceEnabled } = useStore.getState();
+      if (smartTraceEnabled && ann.points && ann.points.length >= 2) {
+        // Only normalize certain annotation types
+        const orthoTypes = ['line', 'arrow', 'freehand', 'rectangle', 'measure-polyline', 'measure-perimeter'];
+        if (orthoTypes.includes(activeTool)) {
+          ann.points = normalizeToOrtho(ann.points, 15);
+        }
       }
 
       addAnnotation(ann);
@@ -3063,7 +3124,7 @@ export default function MainCanvas({ pageOverride, onPageChange }: MainCanvasPro
 
   const handlePinClick = (pinId: string) => {
     const ann = annotations.find((a) => a.id === pinId);
-    if (ann && ann.type === 'pin') {
+    if (ann && (ann.type === 'pin' || ann.type === 'inspection-task')) {
       setEditingPinId(pinId);
       setPinDialogOpen(true);
     }

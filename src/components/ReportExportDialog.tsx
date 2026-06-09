@@ -8,6 +8,7 @@ import {
   type ExportOptions,
 } from '../utils/reportExport';
 import { generateFieldwireReport } from '../utils/reportGenerator';
+import { generateInspectionPdfReport } from '../utils/inspectionPdfReport';
 
 interface Props {
   onClose: () => void;
@@ -59,6 +60,20 @@ export default function ReportExportDialog({ onClose }: Props) {
       onClose();
     } catch (err: any) {
       setError(err?.message || 'DOCX export failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePdfReportExport = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const tasks = annotations.filter(a => a.type === 'inspection-task');
+      await generateInspectionPdfReport(tasks, baseName);
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || 'PDF report export failed');
     } finally {
       setBusy(false);
     }
@@ -271,6 +286,14 @@ export default function ReportExportDialog({ onClose }: Props) {
           >
             {busy ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             {busy ? 'Generating...' : 'Export DOCX'}
+          </button>
+          <button
+            onClick={handlePdfReportExport}
+            disabled={busy}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-sm font-medium rounded-md transition-colors flex items-center gap-2"
+          >
+            {busy ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
+            {busy ? 'Generating...' : 'Export PDF'}
           </button>
           <button
             onClick={handleExport}

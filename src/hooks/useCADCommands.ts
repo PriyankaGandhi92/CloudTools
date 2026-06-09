@@ -1243,9 +1243,10 @@ export function useCADCommands() {
     addMeasurement,
     activeStyle,
     setActiveStyle,
+    cloudStatus,
   } = useStore();
 
-  const { processCommand: processCloudCommand, cloudStatus } = useCloudCommands();
+  const { processCommand: processCloudCommand } = useCloudCommands();
   const commandRegistry = useMemo(() => createCommandRegistry(), []);
   const feedbackRef = useRef<{ message: string; timestamp: number } | null>(null);
 

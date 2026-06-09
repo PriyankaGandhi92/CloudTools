@@ -10,6 +10,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { formatMeasurement } from '../utils/measurement';
+import EstimatingPanel from './EstimatingPanel';
 
 export default function RightSidebar() {
   const {
@@ -198,6 +199,9 @@ export default function RightSidebar() {
           </div>
         )}
       </div>
+
+      {/* Estimating Panel */}
+      <EstimatingPanel />
     </div>
   );
 }

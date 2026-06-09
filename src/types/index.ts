@@ -197,6 +197,7 @@ export interface PDFDocument {
   ownerId: string;
   sharedWith: Record<string, 'view' | 'edit'>;
   shareLink?: string;
+  bimFileUrl?: string; // URL to linked IFC/BIM file for 3D viewing
   createdAt: number;
   updatedAt: number;
 }

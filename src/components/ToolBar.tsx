@@ -41,6 +41,7 @@ import {
   ChevronDown,
   FormInput,
   ListChecks,
+  Magnet,
 } from 'lucide-react';
 
 interface ToolDef {
@@ -100,7 +101,7 @@ const getTourAttribute = (type: ToolType): string => {
 };
 
 export default function ToolBar({ onWatermarkClick }: { onWatermarkClick?: () => void } = {}) {
-  const { activeTool, setActiveTool, activeStyle, setActiveStyle, setIsCalibrating, splitView, setSplitView, setSplitTabId, cutMode, setCutMode, cutColor, setCutColor, setSelectedBimType, formEditMode, toggleFormEditMode, cadCommandLineOpen } = useStore();
+  const { activeTool, setActiveTool, activeStyle, setActiveStyle, setIsCalibrating, splitView, setSplitView, setSplitTabId, cutMode, setCutMode, cutColor, setCutColor, setSelectedBimType, formEditMode, toggleFormEditMode, smartTraceEnabled, toggleSmartTrace, cadCommandLineOpen } = useStore();
   const [bimDropdownOpen, setBimDropdownOpen] = useState(false);
   const buttonRef = React.useRef<HTMLButtonElement>(null);
   const [dropdownPosition, setDropdownPosition] = React.useState<{ top: number; left: number }>({ top: 0, left: 0 });
@@ -298,6 +299,19 @@ export default function ToolBar({ onWatermarkClick }: { onWatermarkClick?: () =>
         title="Form Edit Mode (Ctrl+F10)"
       >
         <FormInput size={16} />
+      </button>
+
+      {/* Smart Ortho Trace Toggle */}
+      <button
+        onClick={toggleSmartTrace}
+        className={`p-1.5 rounded transition-colors shrink-0 ${
+          smartTraceEnabled
+            ? 'bg-bb-blue text-white'
+            : 'text-bb-muted hover:bg-bb-hover hover:text-bb-text'
+        }`}
+        title="Smart Ortho Snap (Straightens Lines)"
+      >
+        <Magnet size={16} />
       </button>
 
       <div className="w-px h-6 bg-bb-border mx-1 shrink-0" />

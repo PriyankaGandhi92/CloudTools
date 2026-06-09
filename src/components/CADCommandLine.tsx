@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { X, Terminal, ChevronUp, ChevronDown, Command as CommandIcon } from 'lucide-react';
 import { useCADCommands } from '../hooks/useCADCommands';
+import { useCloudCommands } from '../hooks/useCloudCommands';
 import { useStore } from '../store/useStore';
 import type { PendingCADCommand, CommandSuggestion } from '../types/cadCommands';
 
@@ -16,7 +17,48 @@ const categoryColors: Record<string, string> = {
   navigate: 'text-purple-400',
   cleanup: 'text-red-400',
   property: 'text-cyan-400',
+  utility: 'text-gray-300',
+  cloud: 'text-sky-400',
 };
+
+// Stirling PDF cloud commands surfaced as autocomplete suggestions.
+// These are routed to useCloudCommands (not the CAD engine) on execute.
+const CLOUD_SUGGESTIONS: CommandSuggestion[] = [
+  { alias: 'CLOUD:COMPRESS', name: 'Compress PDF', description: 'Reduce file size (optimize=1-9)', category: 'cloud' },
+  { alias: 'CLOUD:OCR', name: 'OCR PDF', description: 'Make scanned text searchable (lang=eng)', category: 'cloud' },
+  { alias: 'CLOUD:REDACT', name: 'Auto Redact', description: 'Automatically redact sensitive text', category: 'cloud' },
+  { alias: 'CLOUD:REPAIR', name: 'Repair PDF', description: 'Fix a corrupted or broken PDF', category: 'cloud' },
+  { alias: 'CLOUD:ENCRYPT', name: 'Encrypt PDF', description: 'Password-protect the document', category: 'cloud' },
+  { alias: 'CLOUD:PDF-A', name: 'Convert to PDF/A', description: 'Archive-grade PDF/A format', category: 'cloud' },
+  { alias: 'CLOUD:TO-WORD', name: 'Convert to Word', description: 'Download as .docx (pages=1-10 for a subset)', category: 'cloud' },
+  { alias: 'CLOUD:TO-PPT', name: 'Convert to PowerPoint', description: 'Download as .pptx (pages=1-10 for a subset)', category: 'cloud' },
+  { alias: 'CLOUD:TO-HTML', name: 'Convert to HTML', description: 'Download as .zip (pages=1-10 for a subset)', category: 'cloud' },
+  { alias: 'CLOUD:FIND-REPLACE', name: 'Find & Replace', description: 'Replace text in PDF (findText=..., replaceText=...)', category: 'cloud' },
+  { alias: 'CLOUD:FIND', name: 'Find & Replace', description: 'Replace text in PDF (prompts for find/replace)', category: 'cloud' },
+];
+
+// Cloud operations that benefit from a page-range prompt (large/slow conversions).
+const CLOUD_PAGE_PROMPT_OPS = new Set(['TO-HTML', 'TO-WORD', 'TO-PPT']);
+
+// Cloud operations that require a text parameter (e.g., what text to redact).
+const CLOUD_TEXT_PROMPT_OPS = new Set(['REDACT']);
+
+// Cloud operations that require dual text parameters (find and replace).
+const CLOUD_DUAL_TEXT_PROMPT_OPS = new Set(['FIND-REPLACE', 'FIND']);
+
+// Extract the operation name from a CLOUD command string (handles both
+// "CLOUD:OP" and "CLOUD OP" forms). Returns uppercase op or ''.
+function parseCloudOperation(upperInput: string): string {
+  const tokens = upperInput.trim().split(/\s+/);
+  let op = '';
+  if (tokens[0].startsWith('CLOUD:')) op = tokens[0].split(':')[1] || '';
+  else if (tokens[0] === 'CLOUD') op = (tokens[1] || '').replace(/^:/, '');
+  
+  // Normalize operation names (e.g., FIND -> FIND-REPLACE)
+  if (op === 'FIND') op = 'FIND-REPLACE';
+  
+  return op;
+}
 
 const categoryBgColors: Record<string, string> = {
   draw: 'bg-green-500/10',
@@ -95,7 +137,18 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
 
   const inputRef = useRef<HTMLInputElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
+  // When set, the command line is waiting for the user to type a page range
+  // for this cloud conversion operation (e.g. 'TO-HTML').
+  const [cloudPagePrompt, setCloudPagePrompt] = useState<string | null>(null);
+  // When set, the command line is waiting for the user to type text
+  // for this cloud operation (e.g., what text to redact).
+  const [cloudTextPrompt, setCloudTextPrompt] = useState<string | null>(null);
+  // When set, the command line is waiting for dual text input (find and replace).
+  // Stores the operation name and the first text (find text).
+  const [cloudDualTextPrompt, setCloudDualTextPrompt] = useState<{ op: string; findText: string } | null>(null);
   const { getSuggestions, executeCommand, getAllCommands } = useCADCommands();
+  const { cloudStatus } = useStore();
+  const { processCommand: processCloudCommand } = useCloudCommands();
 
   // Get CAD state from store
   const {
@@ -215,7 +268,11 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
       return;
     }
 
-    const newSuggestions = getSuggestions(input);
+    const q = input.trim().toLowerCase();
+    const cloudMatches = CLOUD_SUGGESTIONS.filter(
+      (s) => s.alias.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
+    );
+    const newSuggestions = [...cloudMatches, ...getSuggestions(input)];
     setSuggestions(newSuggestions);
     setSelectedSuggestion(0);
     setShowSuggestions(newSuggestions.length > 0);
@@ -236,8 +293,134 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
   const handleExecute = useCallback(() => {
     console.log('handleExecute called - input:', input);
     const trimmed = input.trim();
+
+    // If we're waiting for a page-range answer for a cloud conversion, consume it.
+    if (cloudPagePrompt) {
+      const op = cloudPagePrompt;
+      setCloudPagePrompt(null);
+      const answer = trimmed.replace(/\s+/g, '');
+      const isAll = !answer || answer.toUpperCase() === 'ALL';
+      const fullCmd = isAll ? `CLOUD:${op}` : `CLOUD:${op} pages=${answer}`;
+      setHistory((prev) => [fullCmd, ...prev.filter((h) => h !== fullCmd)].slice(0, 10));
+      setHistoryIndex(-1);
+      processCloudCommand(fullCmd);
+      setInput('');
+      setShowSuggestions(false);
+      setTimeout(() => inputRef.current?.focus(), 0);
+      return;
+    }
+
+    // If we're waiting for a text answer for a cloud operation (e.g., REDACT), consume it.
+    if (cloudTextPrompt) {
+      const op = cloudTextPrompt;
+      setCloudTextPrompt(null);
+      const answer = trimmed.trim();
+      if (!answer) {
+        setLocalFeedback(`${op} cancelled: No text provided.`);
+        setInput('');
+        setShowSuggestions(false);
+        setTimeout(() => inputRef.current?.focus(), 0);
+        return;
+      }
+      const fullCmd = `CLOUD:${op} text=${answer}`;
+      setHistory((prev) => [fullCmd, ...prev.filter((h) => h !== fullCmd)].slice(0, 10));
+      setHistoryIndex(-1);
+      processCloudCommand(fullCmd);
+      setInput('');
+      setShowSuggestions(false);
+      setTimeout(() => inputRef.current?.focus(), 0);
+      return;
+    }
+
+    // If we're waiting for dual text input (FIND-REPLACE), consume it.
+    if (cloudDualTextPrompt) {
+      const { op, findText } = cloudDualTextPrompt;
+      const answer = trimmed.trim();
+      
+      if (!answer) {
+        setLocalFeedback(`${op} cancelled: No text provided.`);
+        setCloudDualTextPrompt(null);
+        setInput('');
+        setShowSuggestions(false);
+        setTimeout(() => inputRef.current?.focus(), 0);
+        return;
+      }
+
+      // If we have findText, this is the replace text
+      if (findText) {
+        const fullCmd = `CLOUD:${op} findText=${findText} replaceText=${answer}`;
+        setHistory((prev) => [fullCmd, ...prev.filter((h) => h !== fullCmd)].slice(0, 10));
+        setHistoryIndex(-1);
+        processCloudCommand(fullCmd);
+        setCloudDualTextPrompt(null);
+        setInput('');
+        setShowSuggestions(false);
+        setTimeout(() => inputRef.current?.focus(), 0);
+        return;
+      } else {
+        // This is the find text, now prompt for replace text
+        setCloudDualTextPrompt({ op, findText: answer });
+        setLocalFeedback(`${op}: Enter the replacement text, or press Escape to cancel.`);
+        setInput('');
+        setShowSuggestions(false);
+        setTimeout(() => inputRef.current?.focus(), 0);
+        return;
+      }
+    }
+
     if (!trimmed) {
       console.log('handleExecute: empty input, returning');
+      return;
+    }
+
+    // Intercept Stirling PDF Cloud Commands (supports "CLOUD COMPRESS" and "CLOUD:COMPRESS")
+    const upper = trimmed.toUpperCase();
+    if (upper.startsWith('CLOUD ') || upper.startsWith('CLOUD:')) {
+      const operation = parseCloudOperation(upper);
+      const hasPages = upper.includes('PAGES=') || upper.includes('RANGE=');
+      const hasText = upper.includes('TEXT=');
+      const hasFindText = upper.includes('FINDTEXT=');
+      const hasReplaceText = upper.includes('REPLACETEXT=');
+
+      // For large conversions, prompt the user for an exact page range first
+      // (unless they already supplied pages=/range=).
+      if (CLOUD_PAGE_PROMPT_OPS.has(operation) && !hasPages) {
+        setCloudPagePrompt(operation);
+        setLocalFeedback(`${operation}: Enter page range (e.g. 1-10 or 1,3,5), or press Enter for ALL pages.`);
+        setInput('');
+        setShowSuggestions(false);
+        setTimeout(() => inputRef.current?.focus(), 0);
+        return;
+      }
+
+      // For operations requiring text input (e.g., REDACT), prompt for text
+      // (unless they already supplied text=).
+      if (CLOUD_TEXT_PROMPT_OPS.has(operation) && !hasText) {
+        setCloudTextPrompt(operation);
+        setLocalFeedback(`${operation}: Enter the text to redact (e.g., "confidential"), or press Escape to cancel.`);
+        setInput('');
+        setShowSuggestions(false);
+        setTimeout(() => inputRef.current?.focus(), 0);
+        return;
+      }
+
+      // For operations requiring dual text input (FIND-REPLACE), prompt for find text first
+      // (unless they already supplied findText= and replaceText=).
+      if (CLOUD_DUAL_TEXT_PROMPT_OPS.has(operation) && (!hasFindText || !hasReplaceText)) {
+        setCloudDualTextPrompt({ op: operation, findText: '' });
+        setLocalFeedback(`${operation}: Enter the text to find, or press Escape to cancel.`);
+        setInput('');
+        setShowSuggestions(false);
+        setTimeout(() => inputRef.current?.focus(), 0);
+        return;
+      }
+
+      setHistory((prev) => [trimmed, ...prev.filter((h) => h !== trimmed)].slice(0, 10));
+      setHistoryIndex(-1);
+      processCloudCommand(trimmed); // Routes to useCloudCommands.ts (updates cadFeedback/cloudStatus)
+      setInput('');
+      setShowSuggestions(false);
+      setTimeout(() => inputRef.current?.focus(), 0);
       return;
     }
 
@@ -295,7 +478,7 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
         console.log('handleExecute: NOT clearing CAD state - currentCmd:', currentCmd, 'isNumeric:', isNumeric, 'isRotatePending:', isRotatePending, 'localPendingCommand:', localPendingCommand?.command);
       }
     }
-  }, [input, localPendingCommand, executeCommand]);
+  }, [input, localPendingCommand, executeCommand, processCloudCommand, cloudPagePrompt, cloudTextPrompt]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Handle autocomplete navigation
@@ -355,6 +538,13 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
       if (showSuggestions && suggestions.length > 0) {
         const selected = suggestions[selectedSuggestion];
         if (selected) {
+          // Cloud commands: fill input (with trailing space for params) and let
+          // the user press Enter again to route through the cloud interceptor.
+          if (selected.category === 'cloud') {
+            setInput(selected.alias + ' ');
+            setShowSuggestions(false);
+            return;
+          }
           setInput(selected.alias);
           setShowSuggestions(false);
           setTimeout(() => {
@@ -444,6 +634,13 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
       if (showSuggestions && suggestions.length > 0) {
         const selected = suggestions[selectedSuggestion];
         if (selected) {
+          // Cloud commands: accept the alias and add a space so the user can
+          // continue typing parameters instead of executing immediately.
+          if (selected.category === 'cloud') {
+            setInput((selected.alias.toLowerCase().startsWith(input.trim().toLowerCase()) ? selected.alias : input.trim()) + ' ');
+            setShowSuggestions(false);
+            return;
+          }
           setInput(selected.alias);
           setShowSuggestions(false);
           setTimeout(() => {
@@ -460,7 +657,31 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      
+
+      // Cancel a pending cloud dual text prompt first.
+      if (cloudDualTextPrompt) {
+        setCloudDualTextPrompt(null);
+        setLocalFeedback(`${cloudDualTextPrompt.op} cancelled.`);
+        setInput('');
+        return;
+      }
+
+      // Cancel a pending cloud text prompt first.
+      if (cloudTextPrompt) {
+        setCloudTextPrompt(null);
+        setLocalFeedback(`${cloudTextPrompt} cancelled.`);
+        setInput('');
+        return;
+      }
+
+      // Cancel a pending cloud page-range prompt.
+      if (cloudPagePrompt) {
+        setCloudPagePrompt(null);
+        setLocalFeedback(`${cloudPagePrompt} cancelled.`);
+        setInput('');
+        return;
+      }
+
       const storeState = useStore.getState();
       const currentCmd = storeState.cadPendingCommand;
       const currentStep = storeState.cadCommandStep;
@@ -493,9 +714,17 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
       }
       return;
     }
-  }, [showSuggestions, suggestions, selectedSuggestion, history, historyIndex, input, localPendingCommand, handleExecute, executeCommand]);
+  }, [showSuggestions, suggestions, selectedSuggestion, history, historyIndex, input, localPendingCommand, handleExecute, executeCommand, cloudPagePrompt, cloudTextPrompt]);
 
   const handleSuggestionClick = (suggestion: CommandSuggestion) => {
+    // Cloud commands often need parameters, so just fill the input and let the
+    // user add args + press Enter (which routes through the cloud interceptor).
+    if (suggestion.category === 'cloud') {
+      setInput(suggestion.alias + ' ');
+      setShowSuggestions(false);
+      inputRef.current?.focus();
+      return;
+    }
     setInput(suggestion.alias);
     setShowSuggestions(false);
     inputRef.current?.focus();
@@ -524,8 +753,49 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
     );
   }
 
+  const isCloudBusy = !!cloudStatus && (cloudStatus.startsWith('Executing') || cloudStatus.startsWith('Validating'));
+  const isCloudError = !!cloudStatus && (cloudStatus.startsWith('Failed') || cloudStatus.startsWith('Error'));
+
   return (
-    <div className="flex justify-center px-4 absolute bottom-full left-0 right-0 mb-0 z-40">
+    <div className="flex flex-col items-center px-4 absolute bottom-full left-0 right-0 mb-0 z-40">
+      {/* Cloud text prompt banner */}
+      {cloudTextPrompt && (
+        <div className="w-full max-w-2xl mb-1">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-mono shadow-lg bg-purple-500/15 border-purple-500/40 text-purple-200">
+            <span className="shrink-0 font-semibold">{cloudTextPrompt}:</span>
+            <span className="flex-1">Type the text to redact (e.g. <span className="font-bold">"confidential"</span>), then Enter. Esc to cancel.</span>
+          </div>
+        </div>
+      )}
+      {/* Cloud page-range prompt banner */}
+      {cloudPagePrompt && (
+        <div className="w-full max-w-2xl mb-1">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-mono shadow-lg bg-amber-500/15 border-amber-500/40 text-amber-200">
+            <span className="shrink-0 font-semibold">{cloudPagePrompt}:</span>
+            <span className="flex-1">Type page range (e.g. <span className="font-bold">1-10</span> or <span className="font-bold">1,3,5</span>), then Enter. Empty Enter = ALL pages. Esc to cancel.</span>
+          </div>
+        </div>
+      )}
+      {/* Cloud command status banner (always visible during/after cloud ops) */}
+      {cloudStatus && (
+        <div className="w-full max-w-2xl mb-1">
+          <div
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-mono shadow-lg ${
+              isCloudError
+                ? 'bg-red-500/15 border-red-500/40 text-red-300'
+                : isCloudBusy
+                ? 'bg-blue-500/15 border-blue-500/40 text-blue-300'
+                : 'bg-green-500/15 border-green-500/40 text-green-300'
+            }`}
+          >
+            {isCloudBusy && (
+              <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />
+            )}
+            <span className="shrink-0 font-semibold">Cloud:</span>
+            <span className="flex-1 truncate">{cloudStatus}</span>
+          </div>
+        </div>
+      )}
       <div 
         className={`w-full max-w-2xl flex flex-col bg-[#1e1e1e] border border-bb-border rounded-t-lg shadow-2xl transition-all ${isExpanded ? 'h-64' : 'h-12'}`}
         
@@ -568,8 +838,8 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
         {/* Command Prompt */}
         <div className="flex items-center gap-1.5 shrink-0">
           <Terminal size={14} className="text-bb-blue" />
-          <span className="font-mono text-sm text-bb-blue font-semibold">
-            {localPendingCommand ? localPendingCommand.alias : (cadPendingCommand || 'COMMAND')}
+          <span className={`font-mono text-sm font-semibold ${cloudPagePrompt ? 'text-amber-400' : cloudTextPrompt ? 'text-purple-400' : 'text-bb-blue'}`}>
+            {cloudPagePrompt ? `${cloudPagePrompt} PAGES` : cloudTextPrompt ? `${cloudTextPrompt} TEXT` : (localPendingCommand ? localPendingCommand.alias : (cadPendingCommand || 'COMMAND'))}
           </span>
           <span className="text-bb-muted">{'>'}</span>
         </div>
@@ -586,7 +856,7 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
               handleKeyDown(e);
             }}
             onFocus={() => input && setShowSuggestions(true)}
-            placeholder={localPendingCommand ? getPlaceholder(localPendingCommand.command, cadPendingPoints.length, localPendingCommand.step || 0, cadSelectedIds.length) : (cadPendingCommand ? getPlaceholder(cadPendingCommand, cadPendingPoints.length, cadCommandStep, cadSelectedIds.length) : 'Type command (e.g. L, REC, RO, ARC)...')}
+            placeholder={cloudPagePrompt ? 'e.g. 1-10 or 1,3,5  (Enter = all pages)' : cloudTextPrompt ? 'e.g. "confidential" or "secret"' : (localPendingCommand ? getPlaceholder(localPendingCommand.command, cadPendingPoints.length, localPendingCommand.step || 0, cadSelectedIds.length) : (cadPendingCommand ? getPlaceholder(cadPendingCommand, cadPendingPoints.length, cadCommandStep, cadSelectedIds.length) : 'Type command (e.g. L, REC, RO, ARC)...'))}
             className="w-full bg-transparent font-mono text-sm text-bb-text placeholder:text-gray-600 outline-none"
             spellCheck={false}
             autoComplete="off"
@@ -611,7 +881,7 @@ export default function CADCommandLine({ isOpen, onToggle }: CADCommandLineProps
                         : 'hover:bg-bb-hover'
                     }`}
                   >
-                    <span className={`font-mono text-sm font-bold w-8 ${categoryColors[suggestion.category]}`}>
+                    <span className={`font-mono text-sm font-bold min-w-8 whitespace-nowrap ${categoryColors[suggestion.category]}`}>
                       {suggestion.alias}
                     </span>
                     <span className="text-gray-400">→</span>

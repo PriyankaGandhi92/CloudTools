@@ -11,7 +11,7 @@ export default {
         'bb-hover': '#35354a',
         'bb-border': '#3a3a50',
         'bb-text': '#e0e0e0',
-        'bb-muted': '#888899',
+        'bb-muted': '#a0a0b0',
         'bb-accent': '#4fc3f7',
       },
     },

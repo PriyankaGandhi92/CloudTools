@@ -1,9 +1,32 @@
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
 import { functions } from '../config/firebase';
 
 interface CloudOperation {
   endpoint: string;
   isFormatConversion: boolean; // True for TO-WORD, TO-HTML, etc.
+}
+
+// Browser-safe base64 helpers (no Node Buffer). Chunked to avoid
+// "Maximum call stack size exceeded" on large PDFs.
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000; // 32KB chunks
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+  }
+  return btoa(binary);
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
 }
 
 const OPERATION_MAP: Record<string, CloudOperation> = {
@@ -16,6 +39,8 @@ const OPERATION_MAP: Record<string, CloudOperation> = {
   'REPAIR': { endpoint: '/api/v1/misc/repair-pdf', isFormatConversion: false },
   'ENCRYPT': { endpoint: '/api/v1/security/encrypt-pdf', isFormatConversion: false },
   'PDF-A': { endpoint: '/api/v1/misc/pdf-to-pdfa', isFormatConversion: false },
+  'FIND-REPLACE': { endpoint: '/api/v1/misc/find-replace', isFormatConversion: false },
+  'FILE-TO-PDF': { endpoint: '/api/v1/convert/file/pdf', isFormatConversion: true },
 };
 
 export async function executeCloudCommand(
@@ -29,7 +54,7 @@ export async function executeCloudCommand(
 
   try {
     // Convert ArrayBuffer to base64 for Firebase Functions
-    const pdfBase64 = Buffer.from(pdfBuffer).toString('base64');
+    const pdfBase64 = arrayBufferToBase64(pdfBuffer);
 
     // Call Firebase Functions v2 callable
     const pdfGatewayCallable = httpsCallable(functions, 'pdfGateway');
@@ -46,7 +71,7 @@ export async function executeCloudCommand(
     }
 
     // Convert base64 back to ArrayBuffer/Blob
-    const resultBuffer = Buffer.from(response.data, 'base64');
+    const resultBuffer = base64ToArrayBuffer(response.data);
 
     // If it's a conversion (Word/PPT), return a Blob for download
     if (response.isConversion) {
@@ -55,7 +80,7 @@ export async function executeCloudCommand(
     } 
     
     // If it's a PDF mutation, return an ArrayBuffer to replace the canvas
-    return { success: true, data: resultBuffer.buffer, isConversion: false };
+    return { success: true, data: resultBuffer, isConversion: false };
 
   } catch (error: any) {
     console.error('Cloud command error:', error);

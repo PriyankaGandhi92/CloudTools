@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '../store/useStore';
 import { renderPageThumbnail, loadPdf, appendPdf, insertPdfAt, getPageCount, reorderRendererPage, insertBlankPage, extractPages, getPageOrder } from '../utils/pdfRenderer';
 import { Upload, Trash2, GripVertical, Bookmark, BookmarkCheck, Search, Replace, ArrowDown, ArrowUp, Download, Edit, Image as ImageIcon, Calendar, User, Layers, ListChecks } from 'lucide-react';
+import TasksView from './TasksView';
 import { getPageTextItems } from '../utils/pdfRenderer';
 import { getOcrCache } from '../utils/ocr';
 import BlankPageDialog from './BlankPageDialog';
@@ -45,6 +46,7 @@ export default function LeftSidebar() {
   const [viewKey, setViewKey] = useState(0);
   const [photoSort, setPhotoSort] = useState<'date' | 'assignee'>('date');
   const [taskAssigneeFilter, setTaskAssigneeFilter] = useState<string>('All');
+  const [taskCategoryFilter, setTaskCategoryFilter] = useState<string>('All');
   const [lastSelectedPageIdx, setLastSelectedPageIdx] = useState<number | null>(null);
 
   // When switching back to pages, bump viewKey so thumbnails re-render
@@ -81,6 +83,43 @@ export default function LeftSidebar() {
       return b.date - a.date;
     });
   }, [annotations, photoSort]);
+
+  // Task filtering (kept at the top level to satisfy Rules of Hooks / prevent React error #310)
+  const tasks = React.useMemo(() => annotations.filter(a => a.type === 'inspection-task'), [annotations]);
+
+  const uniqueAssignees = React.useMemo(() => {
+    const assignees = new Set<string>();
+    tasks.forEach(t => {
+      if (t.pinContent?.assignee) assignees.add(t.pinContent.assignee);
+    });
+    return Array.from(assignees).sort();
+  }, [tasks]);
+
+  const uniqueCategories = React.useMemo(() => {
+    const cats = new Set<string>();
+    tasks.forEach(t => {
+      if (t.pinContent?.category) cats.add(t.pinContent.category);
+    });
+    return Array.from(cats).sort();
+  }, [tasks]);
+
+  const filteredTasks = React.useMemo(() => {
+    return tasks.filter(t => {
+      const matchAssignee = taskAssigneeFilter === 'All' || t.pinContent?.assignee === taskAssigneeFilter;
+      const matchCategory = taskCategoryFilter === 'All' || t.pinContent?.category === taskCategoryFilter;
+      return matchAssignee && matchCategory;
+    });
+  }, [tasks, taskAssigneeFilter, taskCategoryFilter]);
+
+  const taskStatusCounts = React.useMemo(() => {
+    const counts = {
+      'Open': filteredTasks.filter(t => t.pinContent?.status === 'Open').length,
+      'In Progress': filteredTasks.filter(t => t.pinContent?.status === 'In Progress').length,
+      'Complete': filteredTasks.filter(t => t.pinContent?.status === 'Complete').length,
+      'Verified': filteredTasks.filter(t => t.pinContent?.status === 'Verified').length,
+    };
+    return { counts, total: filteredTasks.length };
+  }, [filteredTasks]);
 
   // Drag-to-resize handler
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -581,133 +620,19 @@ export default function LeftSidebar() {
       )}
 
       {/* Tasks view */}
-      {view === 'tasks' && (() => {
-        const tasks = React.useMemo(() => annotations.filter(a => a.type === 'inspection-task'), [annotations]);
-        const statusColors = { 'Open': 'text-red-400', 'In Progress': 'text-yellow-400', 'Complete': 'text-blue-400', 'Verified': 'text-green-400' };
-        
-        const uniqueAssignees = React.useMemo(() => {
-          const assignees = new Set<string>();
-          tasks.forEach(t => {
-            if (t.pinContent?.assignee) assignees.add(t.pinContent.assignee);
-          });
-          return Array.from(assignees).sort();
-        }, [tasks]);
-
-        const filteredTasks = React.useMemo(() => {
-          if (taskAssigneeFilter === 'All') return tasks;
-          return tasks.filter(t => t.pinContent?.assignee === taskAssigneeFilter);
-        }, [tasks, taskAssigneeFilter]);
-        
-        return (
-          <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xs font-semibold text-bb-muted uppercase tracking-wider">Project Tasks</h3>
-              
-              <div className="flex gap-2">
-                <span className="text-xs bg-bb-blue/20 text-bb-blue px-2 py-0.5 rounded-full">{filteredTasks.length} / {tasks.length}</span>
-                <button 
-                  onClick={() => window.dispatchEvent(new CustomEvent('open-export-dialog'))}
-                  className="text-[10px] flex items-center gap-1 bg-green-600 hover:bg-green-500 text-white px-2 py-0.5 rounded transition-colors"
-                >
-                  <Download size={12} /> Export
-                </button>
-              </div>
-            </div>
-
-            {tasks.length > 0 && (
-              <div className="mb-3 flex items-center gap-2">
-                <span className="text-[10px] text-bb-muted uppercase tracking-wider font-semibold">Assignee:</span>
-                <select
-                  value={taskAssigneeFilter}
-                  onChange={(e) => setTaskAssigneeFilter(e.target.value)}
-                  className="flex-1 bg-bb-dark border border-bb-border rounded px-2 py-1 text-xs text-bb-text outline-none focus:border-bb-blue"
-                >
-                  <option value="All">All Users</option>
-                  {uniqueAssignees.map(assignee => (
-                    <option key={assignee} value={assignee}>{assignee}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {filteredTasks.length > 0 && (() => {
-              const counts = {
-                'Open': filteredTasks.filter(t => t.pinContent?.status === 'Open').length,
-                'In Progress': filteredTasks.filter(t => t.pinContent?.status === 'In Progress').length,
-                'Complete': filteredTasks.filter(t => t.pinContent?.status === 'Complete').length,
-                'Verified': filteredTasks.filter(t => t.pinContent?.status === 'Verified').length,
-              };
-              const total = filteredTasks.length;
-
-              return (
-                <div className="mb-4 bg-bb-panel border border-bb-border rounded p-3">
-                  <div className="flex justify-between items-end mb-2">
-                    <span className="text-[10px] uppercase tracking-wider text-bb-muted font-bold">Project Health</span>
-                    <span className="text-xs font-bold text-bb-text">{Math.round((counts['Verified'] / total) * 100)}% Verified</span>
-                  </div>
-                  
-                  <div className="h-2 w-full flex rounded-full overflow-hidden mb-2 bg-black">
-                    <div style={{ width: `${(counts['Verified'] / total) * 100}%` }} className="bg-green-500 h-full" />
-                    <div style={{ width: `${(counts['Complete'] / total) * 100}%` }} className="bg-blue-500 h-full" />
-                    <div style={{ width: `${(counts['In Progress'] / total) * 100}%` }} className="bg-yellow-500 h-full" />
-                    <div style={{ width: `${(counts['Open'] / total) * 100}%` }} className="bg-red-500 h-full" />
-                  </div>
-                  
-                  <div className="flex justify-between text-[9px] text-bb-muted font-medium">
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> V: {counts['Verified']}</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" /> C: {counts['Complete']}</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-500" /> IP: {counts['In Progress']}</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> O: {counts['Open']}</span>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {filteredTasks.length === 0 ? (
-              <div className="text-xs text-bb-muted text-center py-8">
-                {tasks.length === 0 ? 'No tasks recorded.' : 'No tasks for this assignee.'}
-              </div>
-            ) : (
-              filteredTasks.map(task => {
-                const content = task.pinContent || {};
-                
-                return (
-                  <div 
-                    key={task.id}
-                    onClick={() => {
-                      useStore.getState().setCurrentPage(task.pageIndex);
-                      window.dispatchEvent(new CustomEvent('edit-task', { detail: task.id }));
-                    }}
-                    className="bg-[#1e1e1e] border border-bb-border rounded p-3 cursor-pointer hover:border-bb-blue transition-colors group relative"
-                  >
-                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-bb-blue">
-                      <Edit size={14} />
-                    </div>
-
-                    <div className="flex justify-between items-start mb-2 pr-4">
-                      <h4 className="text-sm text-bb-text font-medium group-hover:text-bb-blue transition-colors">
-                        {content.name || 'Untitled Task'}
-                      </h4>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded bg-black/30 font-semibold ${statusColors[content.status || 'Open']}`}>
-                        {content.status || 'Open'}
-                      </span>
-                    </div>
-                    
-                    <div className="flex flex-wrap gap-2 text-[10px] text-bb-muted mb-2">
-                      <span className="bg-bb-dark px-1.5 py-0.5 rounded">Page {task.pageIndex + 1}</span>
-                      {content.priority === 'High' && <span className="bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded flex items-center gap-1">⚠️ High Risk</span>}
-                      {content.assignee && <span className="bg-blue-500/10 text-blue-400 px-1.5 py-0.5 rounded">@{content.assignee}</span>}
-                      {content.category && <span className="bg-purple-500/10 text-purple-400 px-1.5 py-0.5 rounded">{content.category}</span>}
-                    </div>
-
-                    {content.text && <p className="text-xs text-bb-muted line-clamp-2">{content.text}</p>}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        );
-      })()}
+      {view === 'tasks' && (
+        <TasksView
+          tasks={tasks}
+          filteredTasks={filteredTasks}
+          uniqueAssignees={uniqueAssignees}
+          taskAssigneeFilter={taskAssigneeFilter}
+          setTaskAssigneeFilter={setTaskAssigneeFilter}
+          uniqueCategories={uniqueCategories}
+          taskCategoryFilter={taskCategoryFilter}
+          setTaskCategoryFilter={setTaskCategoryFilter}
+          taskStatusCounts={taskStatusCounts}
+        />
+      )}
 
       {/* Photos view */}
       {view === 'photos' && (

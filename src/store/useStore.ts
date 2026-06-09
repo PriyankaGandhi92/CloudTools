@@ -163,6 +163,7 @@ interface EditorState {
   cadPendingExecute: { command: 'COPY' | 'OFFSET' | 'FENCE_TRIM' | 'FENCE_EXTEND' | 'CONVERTTOCAD' | 'DXF' | 'ROTATE_TYPED' | 'MOVE_TYPED' | 'COPY_TYPED' | 'CIRCLE_TYPED' | 'RECTANG_TYPED'; payload?: any } | null;
   cadExtendDefault: boolean;
   cadFeedback: string;
+  cloudStatus: string | null;
 
   // Find highlight
   findHighlight: { pageIndex: number; x: number; y: number; width: number; height: number } | null;
@@ -277,6 +278,7 @@ interface EditorState {
   removeCADSelectedId: (id: string) => void;
   clearCADSelectedIds: () => void;
   setCADFeedback: (msg: string) => void;
+  setCloudStatus: (msg: string | null) => void;
   triggerCADExecute: (command: 'COPY' | 'OFFSET' | 'FENCE_TRIM' | 'FENCE_EXTEND' | 'CONVERTTOCAD' | 'DXF' | 'ROTATE_TYPED' | 'MOVE_TYPED' | 'COPY_TYPED' | 'CIRCLE_TYPED', payload?: any) => void;
   clearCADExecute: () => void;
 
@@ -306,6 +308,11 @@ interface EditorState {
   formFields: FormField[];
   setFormFields: (fields: FormField[]) => void;
   updateFormFieldValue: (fieldName: string, value: string | boolean) => void;
+
+  // Smart Ortho Trace
+  smartTraceEnabled: boolean;
+  setSmartTraceEnabled: (v: boolean) => void;
+  toggleSmartTrace: () => void;
 }
 
 const DEFAULT_STYLE: AnnotationStyle = {
@@ -349,7 +356,7 @@ export const useStore = create<EditorState>((set, get) => ({
   redoStack: [],
 
   leftSidebarOpen: typeof window !== 'undefined' ? window.innerWidth > 768 : true,
-  rightSidebarOpen: false,
+  rightSidebarOpen: true,
   isCalibrating: false,
   calibrationPoints: [],
   drawingPoints: [],
@@ -388,6 +395,7 @@ export const useStore = create<EditorState>((set, get) => ({
   cadPendingExecute: null,
   cadExtendDefault: false,
   cadFeedback: '',
+  cloudStatus: null,
   findHighlight: null,
 
   pdfReadyKey: 0,
@@ -882,6 +890,7 @@ export const useStore = create<EditorState>((set, get) => ({
   removeCADSelectedId: (id) => set((s) => ({ cadSelectedIds: s.cadSelectedIds.filter((i) => i !== id) })),
   clearCADSelectedIds: () => set({ cadSelectedIds: [] }),
   setCADFeedback: (msg) => set({ cadFeedback: msg }),
+  setCloudStatus: (msg) => set({ cloudStatus: msg }),
   triggerCADExecute: (command: 'COPY' | 'OFFSET' | 'FENCE_TRIM' | 'FENCE_EXTEND' | 'CONVERTTOCAD' | 'DXF' | 'ROTATE_TYPED' | 'MOVE_TYPED' | 'COPY_TYPED' | 'CIRCLE_TYPED' | 'RECTANG_TYPED', payload?: any) => set({ cadPendingExecute: { command, payload } }),
   clearCADExecute: () => set({ cadPendingExecute: null }),
 
@@ -921,4 +930,9 @@ export const useStore = create<EditorState>((set, get) => ({
         f.name === fieldName ? { ...f, value } : f
       ),
     })),
+
+  // Smart Ortho Trace
+  smartTraceEnabled: true,
+  setSmartTraceEnabled: (v: boolean) => set({ smartTraceEnabled: v }),
+  toggleSmartTrace: () => set((s) => ({ smartTraceEnabled: !s.smartTraceEnabled })),
 }));

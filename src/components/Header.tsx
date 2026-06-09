@@ -53,7 +53,7 @@ import { generateDocumentId } from '../utils/fileHash';
 import { loadAnnotationsFromIndexedDB } from '../utils/annotationStorage';
 import { FolderOpen } from 'lucide-react';
 
-export default function Header({ isMobile, onToggleLeftSidebar, onToggleRightSidebar, onOpenAiDialog, onOpenOcrDialog, onOpenSignDialog, onOpenSummaryDialog, onOpenPlanReview, onOpenProjectManager, onOpenUrl, onOpenAiFill, onOpenAiChat, onOpenTimeline, onOpenEngParams, onOpenExtension, onShare, onSharePdf, onOpenAddressScan, onOpenConvertToCad, onOpenReportExport, onOpenIdentifyElements }: { isMobile?: boolean; onToggleLeftSidebar?: () => void; onToggleRightSidebar?: () => void; onOpenAiDialog?: () => void; onOpenOcrDialog?: () => void; onOpenSignDialog?: () => void; onOpenSummaryDialog?: () => void; onOpenPlanReview?: () => void; onOpenProjectManager?: () => void; onOpenUrl?: () => void; onOpenAiFill?: () => void; onOpenAiChat?: () => void; onOpenTimeline?: () => void; onOpenEngParams?: () => void; onOpenExtension?: () => void; onShare?: () => void; onSharePdf?: (name: string, data: ArrayBuffer) => Promise<string>; onOpenAddressScan?: () => void; onOpenConvertToCad?: () => void; onOpenReportExport?: () => void; onOpenIdentifyElements?: () => void }) {
+export default function Header({ isMobile, onToggleLeftSidebar, onToggleRightSidebar, onOpenAiDialog, onOpenOcrDialog, onOpenSignDialog, onOpenSummaryDialog, onOpenPlanReview, onOpenProjectManager, onOpenUrl, onOpenAiFill, onOpenAiChat, onOpenTimeline, onOpenEngParams, onOpenExtension, onShare, onSharePdf, onOpenAddressScan, onOpenConvertToCad, onOpenReportExport, onOpenIdentifyElements, onOpenSmartRewrite }: { isMobile?: boolean; onToggleLeftSidebar?: () => void; onToggleRightSidebar?: () => void; onOpenAiDialog?: () => void; onOpenOcrDialog?: () => void; onOpenSignDialog?: () => void; onOpenSummaryDialog?: () => void; onOpenPlanReview?: () => void; onOpenProjectManager?: () => void; onOpenUrl?: () => void; onOpenAiFill?: () => void; onOpenAiChat?: () => void; onOpenTimeline?: () => void; onOpenEngParams?: () => void; onOpenExtension?: () => void; onShare?: () => void; onSharePdf?: (name: string, data: ArrayBuffer) => Promise<string>; onOpenAddressScan?: () => void; onOpenConvertToCad?: () => void; onOpenReportExport?: () => void; onOpenIdentifyElements?: () => void; onOpenSmartRewrite?: () => void }) {
   const { user, logout } = useAuth();
   const { performSilentSave } = useAutoSave();
   const aiButtonRef = useRef<HTMLButtonElement>(null);
@@ -393,6 +393,9 @@ export default function Header({ isMobile, onToggleLeftSidebar, onToggleRightSid
               )}
               {pdfData && onOpenAiFill && (
                 <AiMenuItem icon={<Wand2 size={13} />} label="AI Form Fill" desc="Auto-fill PDF form fields" color="text-purple-300" onClick={() => { onOpenAiFill(); setAiMenuOpen(false); }} />
+              )}
+              {pdfData && onOpenSmartRewrite && (
+                <AiMenuItem icon={<Sparkles size={13} />} label="Smart Rewrite" desc="Edit text preserving fonts" color="text-pink-300" onClick={() => { onOpenSmartRewrite(); setAiMenuOpen(false); }} />
               )}
               {pdfData && onOpenPlanReview && (
                 <AiMenuItem icon={<Shield size={13} />} label="Plan Review" desc="AI structural plan review" color="text-orange-300" onClick={() => { onOpenPlanReview(); setAiMenuOpen(false); }} />

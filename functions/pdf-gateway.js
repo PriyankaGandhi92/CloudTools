@@ -4,9 +4,6 @@ const admin = require('firebase-admin');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 
-// Initialize Firebase Admin
-admin.initializeApp();
-
 // Cloud Run service configuration
 const STIRLING_URL = process.env.STIRLING_URL || 'https://private-stirling-xxx.a.run.app';
 const STIRLING_API_KEY = process.env.STIRLING_API_KEY;
@@ -49,40 +46,89 @@ exports.pdfGateway = onCall(async (request) => {
       'REPAIR': '/api/v1/misc/repair-pdf',
       'ENCRYPT': '/api/v1/security/encrypt-pdf',
       'PDF-A': '/api/v1/misc/pdf-to-pdfa',
+      'FILE-TO-PDF': '/api/v1/convert/file/pdf',
     };
 
-    const endpoint = ENDPOINT_MAP[operation.toUpperCase()];
+    const op = operation.toUpperCase();
+    const endpoint = ENDPOINT_MAP[op];
     if (!endpoint) {
       throw new Error(`Unknown operation: ${operation}`);
     }
 
+    // Some Stirling conversion endpoints require an explicit outputFormat,
+    // otherwise they reject the request with HTTP 400.
+    const REQUIRED_OUTPUT_FORMAT = {
+      'TO-WORD': 'docx',
+      'TO-PPT': 'pptx',
+    };
+
+    // Params handled client-side that must NOT be forwarded to Stirling.
+    const SKIP_PARAMS = new Set(['pages', 'range', 'text']);
+
     // 5. Convert base64 to buffer
     const pdfBuffer = Buffer.from(pdfBase64, 'base64');
 
+    // Determine correct filename and mime type based on operation
+    let uploadFilename = 'document.pdf';
+    let uploadContentType = 'application/pdf';
+
+    // If we are sending a Word document TO Stirling to become a PDF
+    if (op === 'FILE-TO-PDF') {
+      uploadFilename = 'document.docx';
+      uploadContentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+
     // 6. Construct FormData for Stirling
     const form = new FormData();
-    form.append('fileInput', pdfBuffer, { filename: 'document.pdf', contentType: 'application/pdf' });
-    
-    // Add additional parameters
+    form.append('fileInput', pdfBuffer, { 
+      filename: uploadFilename, 
+      contentType: uploadContentType 
+    });
+
+    // Add additional parameters (excluding client-side-only params)
+    const forwardedParams = {};
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
+        if (SKIP_PARAMS.has(key.toLowerCase())) return;
         form.append(key, value);
+        forwardedParams[key.toLowerCase()] = value;
       });
+    }
+
+    // Special handling for REDACT: convert client's 'text' to Stirling's 'listOfText' array
+    if (op === 'REDACT' && params && params.text) {
+      // Stirling expects listOfText as a JSON array of strings
+      form.append('listOfText', JSON.stringify([params.text]));
+    }
+
+    // Inject required outputFormat if the caller didn't supply one.
+    if (REQUIRED_OUTPUT_FORMAT[op] && !forwardedParams['outputformat']) {
+      form.append('outputFormat', REQUIRED_OUTPUT_FORMAT[op]);
     }
 
     // 7. Forward to private Stirling Cloud Run
     const stirlingUrl = `${STIRLING_URL}${endpoint}`;
     
+    // Only send the API key header if a real key is configured. When Stirling's
+    // login/security is disabled, no key is needed and the header is omitted.
+    const hasApiKey = STIRLING_API_KEY && STIRLING_API_KEY !== 'YOUR_STIRLING_API_KEY_HERE';
+    const stirlingHeaders = { ...form.getHeaders() };
+    if (hasApiKey) {
+      stirlingHeaders['X-API-KEY'] = STIRLING_API_KEY;
+    }
+
+    // Create AbortController for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
+
     const response = await fetch(stirlingUrl, {
       method: 'POST',
-      headers: {
-        // Temporarily disabled API key requirement for testing
-        // 'X-API-KEY': STIRLING_API_KEY,
-        ...form.getHeaders()
-      },
+      headers: stirlingHeaders,
       body: form,
-      timeout: 300000 // 5 minute timeout for heavy operations
+      signal: controller.signal
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text();

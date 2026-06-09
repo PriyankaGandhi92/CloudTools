@@ -4,8 +4,8 @@ const cors = require("cors")({ origin: true });
 const admin = require("firebase-admin");
 const functions = require("firebase-functions");
 
-// Import PDF Gateway
-const { pdfGateway } = require('./pdf-gateway');
+// Initialize Firebase Admin app at module level
+admin.initializeApp();
 
 // Lazy-loaded modules (loaded on first use to avoid deployment timeout)
 let _sharp = null;
@@ -14,13 +14,10 @@ function getSharp() { if (!_sharp) _sharp = require("sharp"); return _sharp; }
 function getImageTracer() { if (!_ImageTracer) _ImageTracer = require("imagetracerjs"); return _ImageTracer; }
 
 let db = null;
-let app = null;
 
 function getDb() {
   if (!db) {
-    const { initializeApp } = require("firebase-admin/app");
     const { getFirestore } = require("firebase-admin/firestore");
-    app = initializeApp();
     db = getFirestore();
   }
   return db;
@@ -492,6 +489,81 @@ exports.getAnthropicKey = onCall(
       apiKey: process.env.ANTHROPIC_API_KEY,
       expiresIn: 3600,
     };
+  }
+);
+
+/**
+ * Gemini text rewrite - proxies request to avoid CORS
+ */
+exports.anthropicRewrite = onCall(
+  { secrets: ["GEMINI_API_KEY"], cors: true },
+  async (request) => {
+    const uid = requireAuth(request);
+    await requirePaidUser(uid);
+    await checkRateLimit(uid, "GEMINI_TEXT");
+
+    const { prompt, text } = request.data;
+
+    if (!text || !prompt) {
+      throw new HttpsError("invalid-argument", "Missing required parameters: text and prompt");
+    }
+
+    // Strongly typed system prompt to prevent conversational overflow
+    const systemPrompt = `
+You are a precision document editing engine. Your task is to modify the text according to the instructions.
+
+CRITICAL RULES:
+1. Output EXACTLY the modified text and nothing else.
+2. NEVER include conversational filler (e.g., "Here are the prices", "Sure").
+3. NEVER use Markdown formatting, code fences (\`\`\`), or bolding (**).
+4. If modifying a list or table column, keep the exact same number of line breaks.
+
+Instruction: ${prompt}
+
+Original Text:
+${text}
+`;
+
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{
+                text: systemPrompt
+              }]
+            }],
+            generationConfig: {
+              temperature: 0.1, // Low temperature for highly deterministic output
+            }
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new HttpsError("internal", `Gemini API error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      let rewrittenText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+      if (!rewrittenText) {
+        throw new HttpsError("internal", "Failed to extract rewritten text from Gemini response");
+      }
+
+      // Final safety net: Forcefully strip markdown fences if Gemini disobeys
+      rewrittenText = rewrittenText.replace(/^```[a-zA-Z]*\n/i, '').replace(/\n```$/, '').trim();
+
+      await logUsage(uid, "GEMINI_TEXT", 0.002);
+      return { rewrittenText };
+    } catch (error) {
+      console.error("Gemini rewrite error:", error);
+      throw new HttpsError("internal", error.message || "Failed to call Gemini API");
+    }
   }
 );
 
@@ -1614,5 +1686,5 @@ exports.signPdf = onRequest({
   }
 });
 
-// Export PDF Gateway
-exports.pdfGateway = pdfGateway;
+// Export PDF Gateway (callable)
+exports.pdfGateway = require('./pdf-gateway').pdfGateway;

@@ -1,12 +1,11 @@
 import React, { useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
-import { Hexagon, Loader2, Download, FileImage, FileText, Settings, Layers, PenTool } from 'lucide-react';
+import { Hexagon, Loader2, Download, FileImage, FileText, Settings } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../config/firebase';
 import { PDFDocument } from 'pdf-lib';
 
 interface ConvertOptions {
-  mode: 'full-page' | 'markups-only';
   outputFormat: 'dxf' | 'svg' | 'both';
   scale: number;
   lineWidth: number;
@@ -374,8 +373,7 @@ export default function ConvertToCADDialog({ onClose }: { onClose: () => void })
   const [result, setResult] = useState<ConversionResult | null>(null);
   
   const [options, setOptions] = useState<ConvertOptions>({
-    mode: 'markups-only',
-    outputFormat: 'dxf',
+    outputFormat: 'both',
     scale: 1.0,
     lineWidth: 0.5,
     detectText: true,
@@ -386,78 +384,16 @@ export default function ConvertToCADDialog({ onClose }: { onClose: () => void })
     setResult(null);
     setLoading(true);
 
+    // ==========================================
+    // 1. THE GUARDRAIL: Prevent Blank DXF Bug
+    // ==========================================
     const hasUnsavedImages = useStore.getState().annotations.some(a => a.type === 'image');
-    if (hasUnsavedImages && options.mode === 'full-page') {
-       setError("Please click 'Save' to flatten your pasted images onto the page before converting the full PDF to CAD.");
+    if (hasUnsavedImages) {
+       setError("Please click 'Save' to flatten your pasted images onto the page before converting to CAD.");
        setLoading(false);
        return;
     }
 
-    // ==========================================
-    // FAST PATH: EXPORT MARKUPS ONLY (MAKER.JS)
-    // ==========================================
-    if (options.mode === 'markups-only') {
-      try {
-        setStatus('Compiling local annotations to CAD...');
-        
-        // Dynamically import to keep initial load fast
-        const makerjs = await import('makerjs');
-        const { annotations } = useStore.getState();
-        
-        // Empty state check
-        if (annotations.length === 0) {
-          setError("No annotations found to export. Draw some lines, shapes, or measurements first.");
-          setLoading(false);
-          return;
-        }
-        
-        const masterModel: any = { models: {} };
-        const scaleFactor = options.scale || 1.0;
-
-        annotations.forEach((ann, index) => {
-          if (ann.type === 'line' || ann.type === 'arrow' || ann.type === 'measure-distance') {
-            const pts = ann.points;
-            for (let i = 0; i < pts.length - 1; i++) {
-              const line = new makerjs.paths.Line(
-                [pts[i].x * scaleFactor, -pts[i].y * scaleFactor], 
-                [pts[i+1].x * scaleFactor, -pts[i+1].y * scaleFactor]
-              );
-              masterModel.models[`line_${index}_${i}`] = { paths: { p: line } };
-            }
-          } else if (ann.type === 'freehand') {
-            // Use ConnectTheDots for freehand to treat as unified polyline
-            const pts = ann.points.map(p => [p.x * scaleFactor, -p.y * scaleFactor]);
-            if (pts.length >= 2) {
-              const polyline = new makerjs.models.ConnectTheDots(false, pts);
-              masterModel.models[`freehand_${index}`] = polyline;
-            }
-          } else if (ann.type === 'circle') {
-            const radius = (ann.radius || (ann.points[1] ? Math.hypot(ann.points[1].x - ann.points[0].x, ann.points[1].y - ann.points[0].y) : 10)) * scaleFactor;
-            const circle = new makerjs.paths.Circle([ann.points[0].x * scaleFactor, -ann.points[0].y * scaleFactor], radius);
-            masterModel.models[`circle_${index}`] = { paths: { p: circle } };
-          } else if (ann.type === 'rectangle') {
-            const width = (ann.width || Math.abs(ann.points[1].x - ann.points[0].x)) * scaleFactor;
-            const height = (ann.height || Math.abs(ann.points[1].y - ann.points[0].y)) * scaleFactor;
-            const rect = new makerjs.models.Rectangle(width, height);
-            rect.origin = [Math.min(ann.points[0].x, ann.points[1].x) * scaleFactor, -Math.max(ann.points[0].y, ann.points[1].y) * scaleFactor];
-            masterModel.models[`rect_${index}`] = rect;
-          }
-        });
-
-        const dxfString = makerjs.exporter.toDXF(masterModel);
-        setResult({ dxf: dxfString });
-        setStatus('Markups exported successfully!');
-      } catch (err: any) {
-        setError(err.message || 'Failed to export markups');
-      } finally {
-        setLoading(false);
-      }
-      return; 
-    }
-
-    // ==========================================
-    // FULL PAGE PATH: FIREBASE PDF EXTRACTION
-    // ==========================================
     try {
       setStatus('Getting API key...');
       const keyResult = await httpsCallable(functions, 'getApiKey')();
@@ -574,7 +510,7 @@ export default function ConvertToCADDialog({ onClose }: { onClose: () => void })
     if (format === 'dxf' && dxfUrl) {
       const a = document.createElement('a');
       a.href = dxfUrl;
-      a.download = options.mode === 'markups-only' ? `Markups-page-${currentPage + 1}.dxf` : `converted-page-${currentPage + 1}.dxf`;
+      a.download = `converted-page-${currentPage + 1}.dxf`;
       a.target = '_blank';
       document.body.appendChild(a);
       a.click();
@@ -592,7 +528,7 @@ export default function ConvertToCADDialog({ onClose }: { onClose: () => void })
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = options.mode === 'markups-only' ? `Markups-page-${currentPage + 1}.${format}` : `converted-page-${currentPage + 1}.${format}`;
+    a.download = `converted-page-${currentPage + 1}.${format}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -605,44 +541,27 @@ export default function ConvertToCADDialog({ onClose }: { onClose: () => void })
         {/* Header */}
         <div className="px-5 py-3 border-b border-bb-border flex items-center gap-2 shrink-0">
           <Hexagon size={16} className="text-blue-400" />
-          <h2 className="text-sm font-bold">Export to CAD</h2>
-          <span className="text-[10px] text-bb-muted ml-auto">PDF/Markups → DXF</span>
+          <h2 className="text-sm font-bold">Convert to CAD</h2>
+          <span className="text-[10px] text-bb-muted ml-auto">PDF/Image → DXF/SVG</span>
         </div>
 
         {/* Body */}
         <div className="p-5 space-y-4 flex-1 overflow-auto min-h-0">
-            {/* Mode Selection Toggle */}
-          <div className="mb-4 pb-4 border-b border-bb-border">
-            <label className="text-[10px] text-bb-muted block mb-2 uppercase tracking-wider font-bold">Export Mode</label>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setOptions({ ...options, mode: 'markups-only' })}
-                className={`flex-1 py-2 px-3 rounded text-xs border transition-colors text-left flex items-start gap-2 ${options.mode === 'markups-only' ? 'bg-green-500/10 border-green-500/50 text-green-400' : 'bg-bb-panel border-bb-border text-bb-muted hover:border-bb-muted'}`}
-              >
-                <PenTool size={16} className="mt-0.5 shrink-0" />
-                <div>
-                  <div className="font-bold mb-0.5">Export My Markups Only</div>
-                  <div className="text-[9px] opacity-70 leading-tight">Instant export of lines, shapes, and measurements drawn in the app. Perfect for overlaying back into AutoCAD.</div>
-                </div>
-              </button>
-              <button
-                onClick={() => setOptions({ ...options, mode: 'full-page' })}
-                className={`flex-1 py-2 px-3 rounded text-xs border transition-colors text-left flex items-start gap-2 ${options.mode === 'full-page' ? 'bg-blue-500/10 border-blue-500/50 text-blue-400' : 'bg-bb-panel border-bb-border text-bb-muted hover:border-bb-muted'}`}
-              >
-                <Layers size={16} className="mt-0.5 shrink-0" />
-                <div>
-                  <div className="font-bold mb-0.5">Convert Entire Blueprint</div>
-                  <div className="text-[9px] opacity-70 leading-tight">Uses AI to trace the original PDF and convert the entire building to CAD. Takes 1-3 minutes via cloud processing.</div>
-                </div>
-              </button>
-            </div>
+          {/* Description */}
+          <div className="text-[11px] text-bb-muted leading-relaxed bg-bb-dark rounded-lg border border-bb-border p-3">
+            <p className="mb-2 font-medium text-bb-text">How it works:</p>
+            <p>1. AI detects geometry (lines, arcs, shapes) from the current PDF page</p>
+            <p>2. Converts linework to rough vectors</p>
+            <p>3. Generates DXF (for AutoCAD) and/or SVG files</p>
+            <p>4. Download and open in AutoCAD to edit, scale, and refine</p>
+            <p className="mt-2 text-blue-400/80">Best results with clean line drawings, floor plans, and technical drawings</p>
           </div>
 
           {/* Options */}
           <div className="bg-bb-dark rounded-lg border border-bb-border p-4 space-y-3">
             <div className="flex items-center gap-2 mb-3">
               <Settings size={12} className="text-bb-muted" />
-              <span className="text-xs font-semibold text-bb-text">Formatting Options</span>
+              <span className="text-xs font-semibold text-bb-text">Conversion Options</span>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -652,11 +571,10 @@ export default function ConvertToCADDialog({ onClose }: { onClose: () => void })
                   value={options.outputFormat}
                   onChange={(e) => setOptions({ ...options, outputFormat: e.target.value as any })}
                   className="w-full bg-bb-panel border border-bb-border rounded px-2 py-1.5 text-xs text-bb-text outline-none focus:border-bb-blue"
-                  disabled={options.mode === 'markups-only'}
                 >
                   <option value="dxf">DXF Only</option>
-                  {options.mode !== 'markups-only' && <option value="svg">SVG Only</option>}
-                  {options.mode !== 'markups-only' && <option value="both">Both DXF & SVG</option>}
+                  <option value="svg">SVG Only</option>
+                  <option value="both">Both DXF & SVG</option>
                 </select>
               </div>
 
@@ -673,35 +591,31 @@ export default function ConvertToCADDialog({ onClose }: { onClose: () => void })
                 />
               </div>
 
-              {options.mode === 'full-page' && (
-                <>
-                  <div>
-                    <label className="text-[10px] text-bb-muted block mb-1">Line Width</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      max="5"
-                      value={options.lineWidth}
-                      onChange={(e) => setOptions({ ...options, lineWidth: parseFloat(e.target.value) || 0.5 })}
-                      className="w-full bg-bb-panel border border-bb-border rounded px-2 py-1.5 text-xs text-bb-text outline-none focus:border-bb-blue"
-                    />
-                  </div>
+              <div>
+                <label className="text-[10px] text-bb-muted block mb-1">Line Width</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="5"
+                  value={options.lineWidth}
+                  onChange={(e) => setOptions({ ...options, lineWidth: parseFloat(e.target.value) || 0.5 })}
+                  className="w-full bg-bb-panel border border-bb-border rounded px-2 py-1.5 text-xs text-bb-text outline-none focus:border-bb-blue"
+                />
+              </div>
 
-                  <div className="flex items-center gap-2 pt-4">
-                    <input
-                      type="checkbox"
-                      id="detectText"
-                      checked={options.detectText}
-                      onChange={(e) => setOptions({ ...options, detectText: e.target.checked })}
-                      className="w-3 h-3 accent-blue-500"
-                    />
-                    <label htmlFor="detectText" className="text-[10px] text-bb-text">
-                      Detect Text Elements
-                    </label>
-                  </div>
-                </>
-              )}
+              <div className="flex items-center gap-2 pt-4">
+                <input
+                  type="checkbox"
+                  id="detectText"
+                  checked={options.detectText}
+                  onChange={(e) => setOptions({ ...options, detectText: e.target.checked })}
+                  className="w-3 h-3 accent-blue-500"
+                />
+                <label htmlFor="detectText" className="text-[10px] text-bb-text">
+                  Detect Text Elements
+                </label>
+              </div>
             </div>
           </div>
 
@@ -770,7 +684,7 @@ export default function ConvertToCADDialog({ onClose }: { onClose: () => void })
                 className="px-4 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors flex items-center gap-1.5"
               >
                 <Hexagon size={12} />
-                {options.mode === 'markups-only' ? 'Generate' : 'Convert'}
+                Convert
               </button>
             )}
             {result && (
